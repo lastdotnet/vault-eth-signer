@@ -7,7 +7,7 @@ import (
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/sdk/plugin"
 
-	"github.com/Brahma-fi/vault-eth-signer/internal/usecase"
+	"github.com/lastdotnet/vault-eth-signer/internal/usecase"
 )
 
 func main() {

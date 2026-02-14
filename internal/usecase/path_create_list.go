@@ -94,7 +94,7 @@ func (b *Backend) createKeyManager(
 
 		key := re.FindString(keyInput)
 		if key == "" {
-			b.Logger().Error("Input private key did not parse successfully", "privateKey", keyInput)
+			b.Logger().Error("Input private key did not parse successfully")
 			return nil, fmt.Errorf("privateKey must be a 32-byte hexidecimal string")
 		}
 

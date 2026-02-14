@@ -3,6 +3,7 @@ package usecase
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -82,12 +83,17 @@ func pathSignTx(b *Backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "(optional) Integer of the gasTipCap provided for the transaction execution. It will return unused gas",
 			},
-			"chainId": {
-				Type:        framework.TypeString,
-				Description: "(optional) Chain ID of the target blockchain network. If present, EIP155 signer will be used to sign. If omitted, Homestead signer will be used.",
-				Default:     "0",
-			},
+		"chainId": {
+			Type:        framework.TypeString,
+			Description: "(optional) Chain ID of the target blockchain network. If present, EIP155 signer will be used to sign. If omitted, Homestead signer will be used.",
+			Default:     "0",
 		},
+		"accessList": {
+			Type:        framework.TypeString,
+			Description: "(optional) JSON-encoded access list for EIP-2930/EIP-1559 transactions. Format: [{\"address\":\"0x...\",\"storageKeys\":[\"0x...\"]}]",
+			Default:     "",
+		},
+	},
 	}
 }
 
@@ -248,7 +254,17 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 	if gasFeeCapStr != "" && gasTipCapStr != "" {
 		gasFeeCap := validNumber(data.Get("gasFeeCap").(string))
 		gasTipCap := validNumber(data.Get("gasTipCap").(string))
-		out.tx = newTransactionWithDynamicFee(addressTo, nonce, gasFeeCap, gasTipCap, gasLimit, txDataToSign, amount)
+
+		var accessList types.AccessList
+		accessListStr, _ := data.Get("accessList").(string)
+		if accessListStr != "" {
+			if err := json.Unmarshal([]byte(accessListStr), &accessList); err != nil {
+				b.Logger().Error("Failed to parse accessList", "error", err)
+				return nil, fmt.Errorf("invalid accessList JSON: %w", err)
+			}
+		}
+
+		out.tx = newTransactionWithDynamicFee(addressTo, nonce, gasFeeCap, gasTipCap, gasLimit, txDataToSign, amount, chainID, accessList)
 	} else {
 		out.tx = newLegacyTransaction(addressTo, nonce, gasPrice, gasLimit, txDataToSign, amount)
 	}

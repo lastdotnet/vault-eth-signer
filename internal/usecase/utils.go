@@ -28,15 +28,19 @@ func newTransactionWithDynamicFee(
 	gas uint64,
 	data []byte,
 	value *big.Int,
+	chainID *big.Int,
+	accessList types.AccessList,
 ) *types.Transaction {
 	return types.NewTx(&types.DynamicFeeTx{
-		To:        to,
-		Nonce:     nonce,
-		GasFeeCap: gasFeeCap,
-		GasTipCap: gasTipCap,
-		Gas:       gas,
-		Value:     value,
-		Data:      data,
+		ChainID:    chainID,
+		To:         to,
+		Nonce:      nonce,
+		GasFeeCap:  gasFeeCap,
+		GasTipCap:  gasTipCap,
+		Gas:        gas,
+		Value:      value,
+		Data:       data,
+		AccessList: accessList,
 	})
 }
 
@@ -77,7 +81,10 @@ func validNumber(input string) *big.Int {
 	if !ok {
 		return nil
 	}
-	return amount.Abs(amount)
+	if amount.Sign() < 0 {
+		return nil
+	}
+	return amount
 }
 
 // nolint
