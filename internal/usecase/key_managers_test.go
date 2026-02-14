@@ -66,3 +66,11 @@ func NewStorageMock(a, b, c, d int) StorageMock {
 	sm.switches = []int{a, b, c, d}
 	return sm
 }
+
+type deleteErrorStorage struct {
+	logical.InmemStorage
+}
+
+func (d *deleteErrorStorage) Delete(_ context.Context, _ string) error {
+	return errors.New("failed to delete from storage")
+}

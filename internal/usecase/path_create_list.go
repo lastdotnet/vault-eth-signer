@@ -65,14 +65,18 @@ func (b *Backend) createKeyManager(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	serviceInput, ok := data.Get("serviceName").(string)
-	if !ok {
-		return nil, errInvalidType
+	serviceInput, err := getStringField(data, "serviceName")
+	if err != nil {
+		return nil, err
 	}
 
-	keyInput, ok := data.Get("privateKey").(string)
-	if !ok {
-		return nil, errInvalidType
+	if err := validateServiceName(serviceInput); err != nil {
+		return nil, err
+	}
+
+	keyInput, err := getStringField(data, "privateKey")
+	if err != nil {
+		return nil, err
 	}
 
 	keyManager, err := b.retrieveKeyManager(ctx, req, serviceInput)
@@ -90,12 +94,16 @@ func (b *Backend) createKeyManager(
 	var privateKeyBytes []byte
 
 	if keyInput != "" {
-		re := regexp.MustCompile("[0-9a-fA-F]{64}$")
+		re := regexp.MustCompile(`^(0x)?[0-9a-fA-F]{64}$`)
 
-		key := re.FindString(keyInput)
-		if key == "" {
+		if !re.MatchString(keyInput) {
 			b.Logger().Error("Input private key did not parse successfully")
-			return nil, fmt.Errorf("privateKey must be a 32-byte hexidecimal string")
+			return nil, fmt.Errorf("privateKey must be a 32-byte hexadecimal string")
+		}
+
+		key := keyInput
+		if len(key) > 64 {
+			key = key[len(key)-64:]
 		}
 
 		privateKey, err = crypto.HexToECDSA(key)
@@ -104,7 +112,11 @@ func (b *Backend) createKeyManager(
 			return nil, fmt.Errorf("error reconstructing private key from input hex, %w", err)
 		}
 	} else {
-		privateKey, _ = crypto.GenerateKey()
+		privateKey, err = crypto.GenerateKey()
+		if err != nil {
+			b.Logger().Error("Failed to generate private key", "error", err)
+			return nil, fmt.Errorf("failed to generate private key: %w", err)
+		}
 	}
 
 	privateKeyBytes = crypto.FromECDSA(privateKey)
@@ -127,7 +139,11 @@ func (b *Backend) createKeyManager(
 	keyManager.KeyPairs = append(keyManager.KeyPairs, keyPair)
 
 	policyPath := fmt.Sprintf("key-managers/%s", serviceInput)
-	entry, _ := logical.StorageEntryJSON(policyPath, keyManager)
+	entry, err := logical.StorageEntryJSON(policyPath, keyManager)
+	if err != nil {
+		b.Logger().Error("Failed to marshal keyManager to JSON", "error", err)
+		return nil, fmt.Errorf("failed to marshal keyManager: %w", err)
+	}
 	err = req.Storage.Put(ctx, entry)
 	if err != nil {
 		b.Logger().Error("Failed to save the new keyManager to storage", "error", err)

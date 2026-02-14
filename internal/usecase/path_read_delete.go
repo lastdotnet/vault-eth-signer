@@ -38,9 +38,9 @@ func (b *Backend) readKeyManager(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	serviceName, ok := data.Get("name").(string)
-	if !ok {
-		return nil, errInvalidType
+	serviceName, err := getStringField(data, "name")
+	if err != nil {
+		return nil, err
 	}
 
 	b.Logger().Info("Retrieving key manager for service name", "service_name", serviceName)
@@ -70,9 +70,9 @@ func (b *Backend) deleteKeyManager(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	serviceName, ok := data.Get("name").(string)
-	if !ok {
-		return nil, errInvalidType
+	serviceName, err := getStringField(data, "name")
+	if err != nil {
+		return nil, err
 	}
 
 	policy, err := b.retrieveKeyManager(ctx, req, serviceName)

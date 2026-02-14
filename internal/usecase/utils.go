@@ -3,21 +3,47 @@ package usecase
 import (
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
 	"math/big"
 	"regexp"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/hashicorp/vault/sdk/framework"
 )
 
 var (
 	errInvalidType = errors.New("invalid input type")
+
+	// serviceNameRegex validates service names to prevent storage key injection.
+	// Only allows alphanumeric, dots, hyphens, and underscores. No slashes, no path traversal.
+	serviceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 )
 
-type Nonce struct {
-	ConfirmedNonce uint64
-	PendingNonce   uint64
+// validateServiceName ensures the service name is safe for use as a storage key component.
+// Rejects empty strings, path traversal attempts (../), slashes, and control characters.
+func validateServiceName(name string) error {
+	if name == "" {
+		return fmt.Errorf("serviceName is required")
+	}
+	if !serviceNameRegex.MatchString(name) {
+		return fmt.Errorf("serviceName must be 1-64 chars, alphanumeric/dot/hyphen/underscore, no slashes or special chars")
+	}
+	return nil
+}
+
+// getStringField safely extracts a string field from FieldData without panicking on type assertion.
+func getStringField(data *framework.FieldData, field string) (string, error) {
+	raw, ok := data.GetOk(field)
+	if !ok {
+		return "", nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("field %q: %w", field, errInvalidType)
+	}
+	return s, nil
 }
 
 func newTransactionWithDynamicFee(
@@ -87,12 +113,4 @@ func validNumber(input string) *big.Int {
 	return amount
 }
 
-// nolint
-func contains(arr []*big.Int, value *big.Int) bool {
-	for _, a := range arr {
-		if a.Cmp(value) == 0 {
-			return true
-		}
-	}
-	return false
-}
+
