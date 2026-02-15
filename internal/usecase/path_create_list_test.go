@@ -170,6 +170,29 @@ func TestBackend_createKeyManagerWith0xPrefix(t *testing.T) {
 	assert.Equal(t, "0xBffc2f3Df75367B0f246aF6Ae42AFf59A33f2704", resp.Data["address"])
 }
 
+func TestBackend_createKeyManagerDuplicateAddressNotAppended(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storageReq := logical.TestRequest(t, logical.UpdateOperation, "key-managers")
+	storage := storageReq.Storage
+
+	for i := 0; i < 2; i++ {
+		req := logical.TestRequest(t, logical.UpdateOperation, "key-managers")
+		req.Storage = storage
+		req.Data = map[string]interface{}{
+			"serviceName": "dupe-svc",
+			"privateKey":  "3ee65159f7aa057c482b1041f18f37ce90ef5e460cb46fd3fa0c40fbae41c7e1",
+		}
+		_, err := b.HandleRequest(context.Background(), req)
+		require.NoError(t, err)
+	}
+
+	req := logical.TestRequest(t, logical.ReadOperation, "key-managers/dupe-svc")
+	req.Storage = storage
+	resp, err := b.HandleRequest(context.Background(), req)
+	require.NoError(t, err)
+	assert.Len(t, resp.Data["addresses"], 1)
+}
+
 func TestBackend_createKeyManagerStorageRetrievalError(t *testing.T) {
 	b, _ := newTestBackend(t)
 	req := logical.TestRequest(t, logical.UpdateOperation, "key-managers")

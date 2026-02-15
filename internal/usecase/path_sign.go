@@ -39,6 +39,11 @@ func pathSign(b *Backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "The address that belongs to a private key in the key-manager.",
 			},
+			"allowRawSigning": {
+				Type:        framework.TypeBool,
+				Description: "Unsafe opt-in. Must be true to sign arbitrary 32-byte digests.",
+				Default:     false,
+			},
 		},
 	}
 }
@@ -83,6 +88,14 @@ func (b *Backend) sign(
 		return nil, fmt.Errorf("invalid Ethereum address: %s", address)
 	}
 	address = common.HexToAddress(address).Hex()
+
+	allowRawSigning, err := getBoolField(data, "allowRawSigning")
+	if err != nil {
+		return nil, err
+	}
+	if !allowRawSigning {
+		return nil, fmt.Errorf("raw hash signing is disabled by default; set allowRawSigning=true to acknowledge unsafe mode")
+	}
 
 	keyManager, err := b.retrieveKeyManager(ctx, req, serviceNameInput)
 	if err != nil {

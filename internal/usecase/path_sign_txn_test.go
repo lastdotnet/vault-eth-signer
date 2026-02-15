@@ -84,6 +84,7 @@ func TestBackend_signTx(t *testing.T) {
 		"gas":      2000,
 		"nonce":    "0x2",
 		"gasPrice": 0,
+		"chainId":  "1",
 	}
 	resp, err = b.HandleRequest(context.Background(), req)
 	require.NoError(t, err)
@@ -95,8 +96,8 @@ func TestBackend_signTx(t *testing.T) {
 	require.NoError(t, err)
 
 	v, _, _ := tx.RawSignatureValues()
-	assert.True(t, v.Cmp(big.NewInt(27)) == 0 || v.Cmp(big.NewInt(28)) == 0, "v should be 27 or 28")
-	sender, _ := types.Sender(types.HomesteadSigner{}, tx)
+	assert.True(t, v.Cmp(big.NewInt(37)) == 0 || v.Cmp(big.NewInt(38)) == 0, "v should be 37 or 38")
+	sender, _ := types.Sender(types.LatestSignerForChainID(big.NewInt(1)), tx)
 	assert.Equal(t, address.Hex(), sender.Hex())
 
 	req = logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
@@ -147,6 +148,66 @@ func TestBackend_signTx(t *testing.T) {
 	assert.True(t, v.Cmp(big.NewInt(1)) == 0)
 	sender, _ = types.Sender(types.LatestSignerForChainID(big.NewInt(1)), tx)
 	assert.Equal(t, address.Hex(), sender.Hex())
+	assert.NotEmpty(t, resp.Data["transaction_hash"])
+	assert.NotEmpty(t, resp.Data["signed_transaction"])
+}
+
+func TestBackend_signTxMissingNonce(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := createTxTestService(t, b)
+
+	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
+	req.Storage = storage
+	data := validTxData()
+	delete(data, "nonce")
+	req.Data = data
+	_, err := b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "nonce is required")
+}
+
+func TestBackend_signTxMissingChainId(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := createTxTestService(t, b)
+
+	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
+	req.Storage = storage
+	data := validTxData()
+	delete(data, "chainId")
+	req.Data = data
+	_, err := b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "chainId is required")
+}
+
+func TestBackend_signTxZeroChainIdRejected(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := createTxTestService(t, b)
+
+	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
+	req.Storage = storage
+	data := validTxData()
+	data["chainId"] = "0"
+	req.Data = data
+	_, err := b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "must be non-zero")
+}
+
+func TestBackend_signTxUint64OverflowRejected(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := createTxTestService(t, b)
+
+	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
+	req.Storage = storage
+	data := validTxData()
+	data["nonce"] = "18446744073709551616"
+	req.Data = data
+	_, err := b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "nonce value exceeds uint64")
+
+	data = validTxData()
+	data["gas"] = "18446744073709551616"
+	req.Data = data
+	_, err = b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "gas value exceeds uint64")
 }
 
 func TestBackend_signTxInvalidNonce(t *testing.T) {
@@ -174,6 +235,7 @@ func TestBackend_signTxMissingDataAndInput(t *testing.T) {
 		"gas":      "2000",
 		"nonce":    "0x2",
 		"gasPrice": "0",
+		"chainId":  "1",
 	}
 	_, err := b.HandleRequest(context.Background(), req)
 	assert.ErrorContains(t, err, "either 'data' or 'input' field is required")
@@ -287,6 +349,41 @@ func TestBackend_signTxInvalidGasTipCap(t *testing.T) {
 	assert.ErrorContains(t, err, "invalid gasTipCap")
 }
 
+func TestBackend_signTxPartialEIP1559FieldsRejected(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := createTxTestService(t, b)
+
+	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
+	req.Storage = storage
+	data := validTxData()
+	data["gasFeeCap"] = "1"
+	delete(data, "gasTipCap")
+	req.Data = data
+	_, err := b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "must be provided together")
+
+	data = validTxData()
+	data["gasTipCap"] = "1"
+	delete(data, "gasFeeCap")
+	req.Data = data
+	_, err = b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "must be provided together")
+}
+
+func TestBackend_signTxGasFeeCapLessThanTipRejected(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := createTxTestService(t, b)
+
+	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
+	req.Storage = storage
+	data := validTxData()
+	data["gasFeeCap"] = "1"
+	data["gasTipCap"] = "2"
+	req.Data = data
+	_, err := b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "gasFeeCap must be greater than or equal")
+}
+
 func TestBackend_signTxInvalidChainId(t *testing.T) {
 	b, _ := newTestBackend(t)
 	storage := createTxTestService(t, b)
@@ -325,6 +422,7 @@ func TestBackend_signTxContractCreation(t *testing.T) {
 		"gas":      "90000",
 		"nonce":    "0x0",
 		"gasPrice": "0",
+		"chainId":  "1",
 	}
 	resp, err := b.HandleRequest(context.Background(), req)
 	require.NoError(t, err)
@@ -402,13 +500,13 @@ func TestBackend_signTxCorruptStoredKey(t *testing.T) {
 		"gasPrice":   {Type: framework.TypeString, Default: "0"},
 		"gasFeeCap":  {Type: framework.TypeString},
 		"gasTipCap":  {Type: framework.TypeString},
-		"chainId":    {Type: framework.TypeString, Default: "0"},
+		"chainId":    {Type: framework.TypeString},
 		"accessList": {Type: framework.TypeString, Default: ""},
 	}
 	data := &framework.FieldData{
 		Raw: map[string]interface{}{
 			"name": "corrupt-svc", "data": txTestData, "address": txTestAddress,
-			"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0",
+			"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0", "chainId": "1",
 		},
 		Schema: txSchema,
 	}
@@ -459,6 +557,27 @@ func TestBackend_signTxInvalidAccessList(t *testing.T) {
 	}
 	_, err := b.HandleRequest(context.Background(), req)
 	assert.ErrorContains(t, err, "invalid accessList JSON")
+}
+
+func TestBackend_signTxOversizedInputsRejected(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := createTxTestService(t, b)
+
+	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+txTestSvc+"/txn/sign")
+	req.Storage = storage
+	data := validTxData()
+	data["data"] = "0x" + string(bytes.Repeat([]byte{'a'}, (maxTxDataBytes*2)+2))
+	req.Data = data
+	_, err := b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "transaction data too large")
+
+	data = validTxData()
+	data["gasFeeCap"] = "100"
+	data["gasTipCap"] = "10"
+	data["accessList"] = string(bytes.Repeat([]byte{'x'}, maxAccessListJSONBytes+1))
+	req.Data = data
+	_, err = b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "accessList exceeds size limit")
 }
 
 func TestBackend_signTxCaseInsensitiveAddress(t *testing.T) {
@@ -514,7 +633,7 @@ func TestBackend_signTxValidateAndGetTxEdgeCases(t *testing.T) {
 			"gasPrice":   {Type: framework.TypeString, Default: "0"},
 			"gasFeeCap":  {Type: framework.TypeString},
 			"gasTipCap":  {Type: framework.TypeString},
-			"chainId":    {Type: framework.TypeString, Default: "0"},
+			"chainId":    {Type: framework.TypeString},
 			"accessList": {Type: framework.TypeString, Default: ""},
 		}
 	}
@@ -522,7 +641,7 @@ func TestBackend_signTxValidateAndGetTxEdgeCases(t *testing.T) {
 	goodRaw := func() map[string]interface{} {
 		return map[string]interface{}{
 			"name": "svc", "data": txTestData, "address": txTestAddress,
-			"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0",
+			"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0", "chainId": "1",
 		}
 	}
 
@@ -530,7 +649,7 @@ func TestBackend_signTxValidateAndGetTxEdgeCases(t *testing.T) {
 		data := &framework.FieldData{
 			Raw: map[string]interface{}{
 				"name": "svc", "data": "aabbcc", "address": txTestAddress,
-				"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0",
+				"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0", "chainId": "1",
 			},
 			Schema: goodSchema(),
 		}
@@ -543,7 +662,7 @@ func TestBackend_signTxValidateAndGetTxEdgeCases(t *testing.T) {
 		data := &framework.FieldData{
 			Raw: map[string]interface{}{
 				"name": "svc", "data": "ab", "address": txTestAddress,
-				"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0",
+				"to": txTestTo, "gas": "90000", "nonce": "0x0", "gasPrice": "0", "chainId": "1",
 			},
 			Schema: goodSchema(),
 		}

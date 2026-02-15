@@ -151,6 +151,56 @@ func TestGetStringField(t *testing.T) {
 	})
 }
 
+func TestGetBoolField(t *testing.T) {
+	schema := map[string]*framework.FieldSchema{
+		"flag": {Type: framework.TypeBool, Default: false},
+	}
+
+	t.Run("present bool field", func(t *testing.T) {
+		data := &framework.FieldData{
+			Raw:    map[string]interface{}{"flag": true},
+			Schema: schema,
+		}
+		val, err := getBoolField(data, "flag")
+		require.NoError(t, err)
+		assert.True(t, val)
+	})
+
+	t.Run("absent field returns false", func(t *testing.T) {
+		data := &framework.FieldData{
+			Raw:    map[string]interface{}{},
+			Schema: schema,
+		}
+		val, err := getBoolField(data, "flag")
+		require.NoError(t, err)
+		assert.False(t, val)
+	})
+
+	t.Run("type mismatch returns error", func(t *testing.T) {
+		badSchema := map[string]*framework.FieldSchema{
+			"flag": {Type: framework.TypeString},
+		}
+		data := &framework.FieldData{
+			Raw:    map[string]interface{}{"flag": "true"},
+			Schema: badSchema,
+		}
+		_, err := getBoolField(data, "flag")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errInvalidType)
+	})
+}
+
+func TestUint64FromBig(t *testing.T) {
+	val, err := uint64FromBig(big.NewInt(1))
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), val)
+
+	overflow := new(big.Int).Add(new(big.Int).SetUint64(^uint64(0)), big.NewInt(1))
+	_, err = uint64FromBig(overflow)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errValueTooLarge)
+}
+
 func TestNewTransactionWithDynamicFee(t *testing.T) {
 	to := common.HexToAddress("0xf809410b0d6f047c603deb311979cd413e025a84")
 	tx := newTransactionWithDynamicFee(

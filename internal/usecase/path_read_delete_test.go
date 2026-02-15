@@ -132,3 +132,31 @@ func TestBackend_deleteKeyManagerStorageDeleteError(t *testing.T) {
 	_, err = b.HandleRequest(context.Background(), req)
 	assert.ErrorContains(t, err, "failed to delete from storage")
 }
+
+func TestBackend_deleteKeyManagerUsesRequestedPath(t *testing.T) {
+	b, _ := newTestBackend(t)
+	storage := &logical.InmemStorage{}
+
+	corrupt := &KeyManager{ServiceName: "other-name", KeyPairs: []*KeyPair{}}
+	entry, err := logical.StorageEntryJSON("key-managers/requested-name", corrupt)
+	require.NoError(t, err)
+	require.NoError(t, storage.Put(context.Background(), entry))
+
+	other := &KeyManager{ServiceName: "other-name", KeyPairs: []*KeyPair{}}
+	entry, err = logical.StorageEntryJSON("key-managers/other-name", other)
+	require.NoError(t, err)
+	require.NoError(t, storage.Put(context.Background(), entry))
+
+	req := logical.TestRequest(t, logical.DeleteOperation, "key-managers/requested-name")
+	req.Storage = storage
+	_, err = b.HandleRequest(context.Background(), req)
+	require.NoError(t, err)
+
+	requestedEntry, err := storage.Get(context.Background(), "key-managers/requested-name")
+	require.NoError(t, err)
+	assert.Nil(t, requestedEntry)
+
+	otherEntry, err := storage.Get(context.Background(), "key-managers/other-name")
+	require.NoError(t, err)
+	assert.NotNil(t, otherEntry)
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -134,6 +135,18 @@ func (b *Backend) createKeyManager(
 		PrivateKey: common.Bytes2Hex(privateKeyBytes),
 		PublicKey:  common.Bytes2Hex(publicKeyBytes),
 		Address:    crypto.PubkeyToAddress(*publicKeyECDSA).Hex(),
+	}
+
+	for _, existingKeyPair := range keyManager.KeyPairs {
+		if strings.EqualFold(existingKeyPair.Address, keyPair.Address) {
+			return &logical.Response{
+				Data: map[string]interface{}{
+					"service_name": keyManager.ServiceName,
+					"address":      existingKeyPair.Address,
+					"public_key":   existingKeyPair.PublicKey,
+				},
+			}, nil
+		}
 	}
 
 	keyManager.KeyPairs = append(keyManager.KeyPairs, keyPair)

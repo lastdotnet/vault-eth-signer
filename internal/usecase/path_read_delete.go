@@ -86,7 +86,7 @@ func (b *Backend) deleteKeyManager(
 		return nil, nil
 	}
 
-	if err = req.Storage.Delete(ctx, fmt.Sprintf("key-managers/%s", policy.ServiceName)); err != nil {
+	if err = req.Storage.Delete(ctx, fmt.Sprintf("key-managers/%s", serviceName)); err != nil {
 		b.Logger().Error("Failed to delete the key-manager from storage",
 			"service_name", serviceName, "error", err)
 		return nil, err

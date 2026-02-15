@@ -84,17 +84,16 @@ func pathSignTx(b *Backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "(optional) Integer of the gasTipCap provided for the transaction execution. It will return unused gas",
 			},
-		"chainId": {
-			Type:        framework.TypeString,
-			Description: "(optional) Chain ID of the target blockchain network. If present, EIP155 signer will be used to sign. If omitted, Homestead signer will be used.",
-			Default:     "0",
+			"chainId": {
+				Type:        framework.TypeString,
+				Description: "(required) Non-zero chain ID of the target blockchain network.",
+			},
+			"accessList": {
+				Type:        framework.TypeString,
+				Description: "(optional) JSON-encoded access list for EIP-2930/EIP-1559 transactions. Format: [{\"address\":\"0x...\",\"storageKeys\":[\"0x...\"]}]",
+				Default:     "",
+			},
 		},
-		"accessList": {
-			Type:        framework.TypeString,
-			Description: "(optional) JSON-encoded access list for EIP-2930/EIP-1559 transactions. Format: [{\"address\":\"0x...\",\"storageKeys\":[\"0x...\"]}]",
-			Default:     "",
-		},
-	},
 	}
 }
 
@@ -119,6 +118,10 @@ func (b *Backend) signTx(
 		return nil, fmt.Errorf("signing keyManager %s does not exist", fieldsAndTx.from)
 	}
 
+	if len(keyManager.KeyPairs) == 0 {
+		return nil, fmt.Errorf("signing keyManager %s does not have a key pair", fieldsAndTx.from)
+	}
+
 	var privateKeyStr string
 	for _, keyPairs := range keyManager.KeyPairs {
 		if strings.EqualFold(keyPairs.Address, fieldsAndTx.address) {
@@ -138,12 +141,7 @@ func (b *Backend) signTx(
 	}
 	defer zeroKey(privateKey)
 
-	var signer types.Signer
-	if big.NewInt(0).Cmp(fieldsAndTx.chainID) == 0 {
-		signer = types.HomesteadSigner{}
-	} else {
-		signer = types.LatestSignerForChainID(fieldsAndTx.chainID)
-	}
+	signer := types.LatestSignerForChainID(fieldsAndTx.chainID)
 
 	signedTx, err := types.SignTx(fieldsAndTx.tx, signer, privateKey)
 	if err != nil {
@@ -160,8 +158,10 @@ func (b *Backend) signTx(
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"txHash":   signedTx.Hash().Hex(),
-			"signedTx": hexutil.Encode(signedTxBuff.Bytes()),
+			"txHash":             signedTx.Hash().Hex(),
+			"signedTx":           hexutil.Encode(signedTxBuff.Bytes()),
+			"transaction_hash":   signedTx.Hash().Hex(),
+			"signed_transaction": hexutil.Encode(signedTxBuff.Bytes()),
 		},
 	}, nil
 }
@@ -192,10 +192,17 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 		dataInput = "0x" + dataInput
 	}
 
+	if len(dataInput) > 2+(maxTxDataBytes*2) {
+		return nil, fmt.Errorf("transaction data too large")
+	}
+
 	txDataToSign, err := hexutil.Decode(dataInput)
 	if err != nil {
 		b.Logger().Error("Failed to decode payload for the 'data' field", "error", err)
 		return nil, err
+	}
+	if len(txDataToSign) > maxTxDataBytes {
+		return nil, fmt.Errorf("transaction data too large")
 	}
 
 	address, err := getStringField(data, "address")
@@ -231,10 +238,13 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 	if err != nil {
 		return nil, err
 	}
+	if chainIDStr == "" {
+		return nil, fmt.Errorf("chainId is required")
+	}
 	chainID := validNumber(chainIDStr)
-	if chainID == nil {
+	if chainID == nil || chainID.Sign() == 0 {
 		b.Logger().Error("Invalid chainId", "chainId", chainIDStr)
-		return nil, fmt.Errorf("invalid chainId value")
+		return nil, fmt.Errorf("invalid chainId value; must be non-zero")
 	}
 
 	gasStr, err := getStringField(data, "gas")
@@ -246,8 +256,10 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 		b.Logger().Error("Invalid gas limit", "gas", gasStr)
 		return nil, fmt.Errorf("invalid gas limit")
 	}
-
-	gasLimit := gasLimitIn.Uint64()
+	gasLimit, err := uint64FromBig(gasLimitIn)
+	if err != nil {
+		return nil, fmt.Errorf("gas value exceeds uint64")
+	}
 
 	gasPriceStr, err := getStringField(data, "gasPrice")
 	if err != nil {
@@ -268,13 +280,18 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 	if err != nil {
 		return nil, err
 	}
+	if nonceStr == "" {
+		return nil, fmt.Errorf("nonce is required")
+	}
 	nonceIn := validNumber(nonceStr)
 	if nonceIn == nil {
 		b.Logger().Error("Invalid nonce", "nonce", nonceStr)
 		return nil, fmt.Errorf("invalid nonce")
 	}
-
-	nonce := nonceIn.Uint64()
+	nonce, err := uint64FromBig(nonceIn)
+	if err != nil {
+		return nil, fmt.Errorf("nonce value exceeds uint64")
+	}
 
 	var addressTo *common.Address
 	if rawAddressTo != "" {
@@ -291,7 +308,13 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 		chainID: chainID,
 	}
 
-	if gasFeeCapStr != "" && gasTipCapStr != "" {
+	hasGasFeeCap := gasFeeCapStr != ""
+	hasGasTipCap := gasTipCapStr != ""
+	if hasGasFeeCap != hasGasTipCap {
+		return nil, fmt.Errorf("gasFeeCap and gasTipCap must be provided together")
+	}
+
+	if hasGasFeeCap && hasGasTipCap {
 		gasFeeCap := validNumber(gasFeeCapStr)
 		if gasFeeCap == nil {
 			return nil, fmt.Errorf("invalid gasFeeCap value")
@@ -300,6 +323,9 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 		if gasTipCap == nil {
 			return nil, fmt.Errorf("invalid gasTipCap value")
 		}
+		if gasFeeCap.Cmp(gasTipCap) < 0 {
+			return nil, fmt.Errorf("gasFeeCap must be greater than or equal to gasTipCap")
+		}
 
 		accessListStr, err := getStringField(data, "accessList")
 		if err != nil {
@@ -307,9 +333,22 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 		}
 		var accessList types.AccessList
 		if accessListStr != "" {
+			if len(accessListStr) > maxAccessListJSONBytes {
+				return nil, fmt.Errorf("accessList exceeds size limit")
+			}
 			if err := json.Unmarshal([]byte(accessListStr), &accessList); err != nil {
 				b.Logger().Error("Failed to parse accessList", "error", err)
 				return nil, fmt.Errorf("invalid accessList JSON: %w", err)
+			}
+			if len(accessList) > maxAccessListEntries {
+				return nil, fmt.Errorf("accessList has too many entries")
+			}
+			storageKeysCount := 0
+			for _, tuple := range accessList {
+				storageKeysCount += len(tuple.StorageKeys)
+			}
+			if storageKeysCount > maxAccessListStorageKeys {
+				return nil, fmt.Errorf("accessList has too many storage keys")
 			}
 		}
 
