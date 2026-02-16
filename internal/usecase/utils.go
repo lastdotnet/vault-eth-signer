@@ -17,9 +17,11 @@ var (
 	errInvalidType = errors.New("invalid input type")
 	errValueTooLarge = errors.New("value exceeds uint64")
 
-	// serviceNameRegex validates service names to prevent storage key injection.
-	// Only allows alphanumeric, dots, hyphens, and underscores. No slashes, no path traversal.
-	serviceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+	// serviceNameRegex validates service names for use as Vault storage keys.
+	// Must align with Vault's GenericNameRegex: \w((\w|-)*\w)?
+	// Allowed: alphanumeric + underscore everywhere, hyphen only in middle.
+	// No dots, slashes, or special chars — those won't match Vault path routing.
+	serviceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,62}[a-zA-Z0-9_])?$`)
 )
 
 const (
@@ -36,7 +38,7 @@ func validateServiceName(name string) error {
 		return fmt.Errorf("serviceName is required")
 	}
 	if !serviceNameRegex.MatchString(name) {
-		return fmt.Errorf("serviceName must be 1-64 chars, alphanumeric/dot/hyphen/underscore, no slashes or special chars")
+		return fmt.Errorf("serviceName must be 1-64 chars, alphanumeric/underscore/hyphen (no dots), must start and end with alphanumeric or underscore")
 	}
 	return nil
 }

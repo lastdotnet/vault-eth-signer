@@ -153,11 +153,22 @@ func (b *Backend) createKeyManager(
 
 	for _, existingKeyPair := range keyManager.KeyPairs {
 		if strings.EqualFold(existingKeyPair.Address, keyPair.Address) {
+			if allowRawSigningProvided {
+				policyPath := fmt.Sprintf("key-managers/%s", serviceInput)
+				entry, err := logical.StorageEntryJSON(policyPath, keyManager)
+				if err != nil {
+					return nil, fmt.Errorf("failed to marshal keyManager: %w", err)
+				}
+				if err := req.Storage.Put(ctx, entry); err != nil {
+					return nil, fmt.Errorf("failed to persist allowRawSigning update: %w", err)
+				}
+			}
 			return &logical.Response{
 				Data: map[string]interface{}{
-					"service_name": keyManager.ServiceName,
-					"address":      existingKeyPair.Address,
-					"public_key":   existingKeyPair.PublicKey,
+					"service_name":      keyManager.ServiceName,
+					"address":           existingKeyPair.Address,
+					"public_key":        existingKeyPair.PublicKey,
+					"allow_raw_signing": keyManager.AllowRawSigning,
 				},
 			}, nil
 		}
