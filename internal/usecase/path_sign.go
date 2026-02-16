@@ -39,11 +39,6 @@ func pathSign(b *Backend) *framework.Path {
 				Type:        framework.TypeString,
 				Description: "The address that belongs to a private key in the key-manager.",
 			},
-			"allowRawSigning": {
-				Type:        framework.TypeBool,
-				Description: "Unsafe opt-in. Must be true to sign arbitrary 32-byte digests.",
-				Default:     false,
-			},
 		},
 	}
 }
@@ -89,14 +84,6 @@ func (b *Backend) sign(
 	}
 	address = common.HexToAddress(address).Hex()
 
-	allowRawSigning, err := getBoolField(data, "allowRawSigning")
-	if err != nil {
-		return nil, err
-	}
-	if !allowRawSigning {
-		return nil, fmt.Errorf("raw hash signing is disabled by default; set allowRawSigning=true to acknowledge unsafe mode")
-	}
-
 	keyManager, err := b.retrieveKeyManager(ctx, req, serviceNameInput)
 	if err != nil {
 		b.Logger().Error("Failed to retrieve the signing keyManager",
@@ -110,6 +97,10 @@ func (b *Backend) sign(
 
 	if len(keyManager.KeyPairs) == 0 {
 		return nil, fmt.Errorf("signing keyManager %s does not have a key pair", serviceNameInput)
+	}
+
+	if !keyManager.AllowRawSigning {
+		return nil, fmt.Errorf("raw hash signing is disabled for key manager %s", serviceNameInput)
 	}
 
 	var privateKeyStr string

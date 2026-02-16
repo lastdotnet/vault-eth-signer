@@ -23,8 +23,9 @@ func createSignTestService(t *testing.T, b logical.Backend) logical.Storage {
 	t.Helper()
 	req := logical.TestRequest(t, logical.UpdateOperation, "key-managers")
 	req.Data = map[string]interface{}{
-		"serviceName": signTestSvc,
-		"privateKey":  signTestPrivateKey,
+		"serviceName":     signTestSvc,
+		"privateKey":      signTestPrivateKey,
+		"allowRawSigning": true,
 	}
 	_, err := b.HandleRequest(context.Background(), req)
 	require.NoError(t, err)
@@ -45,9 +46,8 @@ func TestBackend_sign(t *testing.T) {
 	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+signTestSvc+"/sign")
 	req.Storage = storage
 	req.Data = map[string]interface{}{
-		"hash":            "0x" + common.Bytes2Hex(hash.Bytes()),
-		"address":         address.String(),
-		"allowRawSigning": true,
+		"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
+		"address": address.String(),
 	}
 	resp, err := b.HandleRequest(context.Background(), req)
 	require.NoError(t, err)
@@ -66,9 +66,8 @@ func TestBackend_signCaseInsensitiveAddress(t *testing.T) {
 	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+signTestSvc+"/sign")
 	req.Storage = storage
 	req.Data = map[string]interface{}{
-		"hash":            "0x" + common.Bytes2Hex(hash.Bytes()),
-		"address":         "0xbffc2f3df75367b0f246af6ae42aff59a33f2704",
-		"allowRawSigning": true,
+		"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
+		"address": "0xbffc2f3df75367b0f246af6ae42aff59a33f2704",
 	}
 	resp, err := b.HandleRequest(context.Background(), req)
 	require.NoError(t, err)
@@ -155,9 +154,8 @@ func TestBackend_signNonexistentService(t *testing.T) {
 	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/nonexistent/sign")
 	req.Storage = storage
 	req.Data = map[string]interface{}{
-		"hash":            "0x" + common.Bytes2Hex(hash.Bytes()),
-		"address":         signTestAddress,
-		"allowRawSigning": true,
+		"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
+		"address": signTestAddress,
 	}
 	_, err := b.HandleRequest(context.Background(), req)
 	assert.ErrorContains(t, err, "does not exist")
@@ -171,9 +169,8 @@ func TestBackend_signAddressNotInKeyManager(t *testing.T) {
 	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+signTestSvc+"/sign")
 	req.Storage = storage
 	req.Data = map[string]interface{}{
-		"hash":            "0x" + common.Bytes2Hex(hash.Bytes()),
-		"address":         "0x0000000000000000000000000000000000000001",
-		"allowRawSigning": true,
+		"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
+		"address": "0x0000000000000000000000000000000000000001",
 	}
 	_, err := b.HandleRequest(context.Background(), req)
 	assert.ErrorContains(t, err, "no private key for the input address")
@@ -187,9 +184,8 @@ func TestBackend_signStorageError(t *testing.T) {
 	sm := NewStorageMock(0, 0, 0, 0)
 	req.Storage = sm
 	req.Data = map[string]interface{}{
-		"hash":            "0x" + common.Bytes2Hex(hash.Bytes()),
-		"address":         signTestAddress,
-		"allowRawSigning": true,
+		"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
+		"address": signTestAddress,
 	}
 	_, err := b.HandleRequest(context.Background(), req)
 	assert.ErrorContains(t, err, "error retrieving signing keyManager")
@@ -200,7 +196,8 @@ func TestBackend_signCorruptStoredKey(t *testing.T) {
 	be := b.(*Backend)
 
 	km := &KeyManager{
-		ServiceName: "corrupt-sign-svc",
+		ServiceName:     "corrupt-sign-svc",
+		AllowRawSigning: true,
 		KeyPairs: []*KeyPair{
 			{
 				PrivateKey: "not-valid-hex",
@@ -217,17 +214,15 @@ func TestBackend_signCorruptStoredKey(t *testing.T) {
 
 	hash := crypto.Keccak256Hash([]byte("test"))
 	signSchema := map[string]*framework.FieldSchema{
-		"name":            {Type: framework.TypeString},
-		"hash":            {Type: framework.TypeString, Default: ""},
-		"address":         {Type: framework.TypeString},
-		"allowRawSigning": {Type: framework.TypeBool, Default: false},
+		"name":    {Type: framework.TypeString},
+		"hash":    {Type: framework.TypeString, Default: ""},
+		"address": {Type: framework.TypeString},
 	}
 	data := &framework.FieldData{
 		Raw: map[string]interface{}{
-			"name":            "corrupt-sign-svc",
-			"hash":            "0x" + common.Bytes2Hex(hash.Bytes()),
-			"address":         signTestAddress,
-			"allowRawSigning": true,
+			"name":    "corrupt-sign-svc",
+			"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
+			"address": signTestAddress,
 		},
 		Schema: signSchema,
 	}
@@ -241,8 +236,9 @@ func TestBackend_signEmptyKeyPairs(t *testing.T) {
 	be := b.(*Backend)
 
 	km := &KeyManager{
-		ServiceName: "empty-keys-svc",
-		KeyPairs:    []*KeyPair{},
+		ServiceName:     "empty-keys-svc",
+		AllowRawSigning: true,
+		KeyPairs:        []*KeyPair{},
 	}
 
 	storage := &logical.InmemStorage{}
@@ -252,17 +248,15 @@ func TestBackend_signEmptyKeyPairs(t *testing.T) {
 
 	hash := crypto.Keccak256Hash([]byte("test"))
 	signSchema := map[string]*framework.FieldSchema{
-		"name":            {Type: framework.TypeString},
-		"hash":            {Type: framework.TypeString, Default: ""},
-		"address":         {Type: framework.TypeString},
-		"allowRawSigning": {Type: framework.TypeBool, Default: false},
+		"name":    {Type: framework.TypeString},
+		"hash":    {Type: framework.TypeString, Default: ""},
+		"address": {Type: framework.TypeString},
 	}
 	data := &framework.FieldData{
 		Raw: map[string]interface{}{
-			"name":            "empty-keys-svc",
-			"hash":            "0x" + common.Bytes2Hex(hash.Bytes()),
-			"address":         signTestAddress,
-			"allowRawSigning": true,
+			"name":    "empty-keys-svc",
+			"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
+			"address": signTestAddress,
 		},
 		Schema: signSchema,
 	}
@@ -279,12 +273,11 @@ func TestBackend_signDirectEdgeCases(t *testing.T) {
 	t.Run("empty name with storage returns key not found", func(t *testing.T) {
 		hash := "0x" + common.Bytes2Hex(crypto.Keccak256Hash([]byte("test")).Bytes())
 		data := &framework.FieldData{
-			Raw: map[string]interface{}{"hash": hash, "address": signTestAddress, "allowRawSigning": true},
+			Raw: map[string]interface{}{"hash": hash, "address": signTestAddress},
 			Schema: map[string]*framework.FieldSchema{
-				"name":            {Type: framework.TypeString},
-				"hash":            {Type: framework.TypeString, Default: ""},
-				"address":         {Type: framework.TypeString},
-				"allowRawSigning": {Type: framework.TypeBool, Default: false},
+				"name":    {Type: framework.TypeString},
+				"hash":    {Type: framework.TypeString, Default: ""},
+				"address": {Type: framework.TypeString},
 			},
 		}
 		req := &logical.Request{Storage: &logical.InmemStorage{}}
@@ -312,8 +305,8 @@ func TestBackend_signDirectEdgeCases(t *testing.T) {
 		data := &framework.FieldData{
 			Raw: map[string]interface{}{"name": "svc", "hash": 42},
 			Schema: map[string]*framework.FieldSchema{
-				"name": {Type: framework.TypeString},
-				"hash": {Type: framework.TypeInt},
+				"name":    {Type: framework.TypeString},
+				"hash":    {Type: framework.TypeInt},
 				"address": {Type: framework.TypeString},
 			},
 		}
@@ -342,7 +335,14 @@ func TestBackend_signDirectEdgeCases(t *testing.T) {
 
 func TestBackend_signRequiresUnsafeOptIn(t *testing.T) {
 	b, _ := newTestBackend(t)
-	storage := createSignTestService(t, b)
+	reqCreate := logical.TestRequest(t, logical.UpdateOperation, "key-managers")
+	reqCreate.Data = map[string]interface{}{
+		"serviceName": signTestSvc,
+		"privateKey":  signTestPrivateKey,
+	}
+	_, err := b.HandleRequest(context.Background(), reqCreate)
+	require.NoError(t, err)
+	storage := reqCreate.Storage
 
 	hash := crypto.Keccak256Hash([]byte("test"))
 	req := logical.TestRequest(t, logical.CreateOperation, "key-managers/"+signTestSvc+"/sign")
@@ -351,6 +351,6 @@ func TestBackend_signRequiresUnsafeOptIn(t *testing.T) {
 		"hash":    "0x" + common.Bytes2Hex(hash.Bytes()),
 		"address": signTestAddress,
 	}
-	_, err := b.HandleRequest(context.Background(), req)
-	assert.ErrorContains(t, err, "raw hash signing is disabled by default")
+	_, err = b.HandleRequest(context.Background(), req)
+	assert.ErrorContains(t, err, "raw hash signing is disabled for key manager")
 }

@@ -43,6 +43,11 @@ func pathCreateAndList(b *Backend) *framework.Path {
 				Description: "(Optional, default random key) Hex string for the private key (32-byte or 64-char long). If present, the request will import the given key instead of generating a new key.",
 				Default:     "",
 			},
+			"allowRawSigning": {
+				Type:        framework.TypeBool,
+				Description: "Unsafe capability flag. If true, this key manager can sign arbitrary 32-byte digests via /sign.",
+				Default:     false,
+			},
 		},
 	}
 }
@@ -80,6 +85,12 @@ func (b *Backend) createKeyManager(
 		return nil, err
 	}
 
+	allowRawSigning, err := getBoolField(data, "allowRawSigning")
+	if err != nil {
+		return nil, err
+	}
+	_, allowRawSigningProvided := data.GetOk("allowRawSigning")
+
 	keyManager, err := b.retrieveKeyManager(ctx, req, serviceInput)
 	if err != nil {
 		return nil, err
@@ -87,8 +98,11 @@ func (b *Backend) createKeyManager(
 
 	if keyManager == nil {
 		keyManager = &KeyManager{
-			ServiceName: serviceInput,
+			ServiceName:     serviceInput,
+			AllowRawSigning: allowRawSigning,
 		}
+	} else if allowRawSigningProvided {
+		keyManager.AllowRawSigning = allowRawSigning
 	}
 
 	var privateKey *ecdsa.PrivateKey
