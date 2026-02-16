@@ -185,7 +185,7 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 	}
 
 	if dataInput == "" {
-		return nil, fmt.Errorf("either 'data' or 'input' field is required")
+		dataInput = "0x"
 	}
 
 	if len(dataInput) > 2 && dataInput[0:2] != "0x" {

@@ -237,8 +237,10 @@ func TestBackend_signTxMissingDataAndInput(t *testing.T) {
 		"gasPrice": "0",
 		"chainId":  "1",
 	}
-	_, err := b.HandleRequest(context.Background(), req)
-	assert.ErrorContains(t, err, "either 'data' or 'input' field is required")
+	resp, err := b.HandleRequest(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.NotEmpty(t, resp.Data["signed_transaction"])
 }
 
 func TestBackend_signTxInvalidHexData(t *testing.T) {
