@@ -50,3 +50,17 @@ func (b *Backend) pathExistenceCheck(ctx context.Context, req *logical.Request, 
 
 	return out != nil, nil
 }
+
+func (b *Backend) keyManagerExistenceCheck(ctx context.Context, req *logical.Request, data *framework.FieldData) (bool, error) {
+	name, err := getStringField(data, "name")
+	if err != nil {
+		return false, err
+	}
+	storagePath := fmt.Sprintf("key-managers/%s", name)
+	out, err := req.Storage.Get(ctx, storagePath)
+	if err != nil {
+		b.Logger().Error("Key manager existence check failed", "error", err)
+		return false, fmt.Errorf("existence check failed: %v", err)
+	}
+	return out != nil, nil
+}

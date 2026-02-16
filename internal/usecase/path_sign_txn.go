@@ -3,9 +3,11 @@ package usecase
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -25,7 +27,7 @@ type RequestFieldsTransaction struct {
 func pathSignTx(b *Backend) *framework.Path {
 	return &framework.Path{
 		Pattern:        "key-managers/" + framework.GenericNameRegex("name") + "/txn/sign",
-		ExistenceCheck: b.pathExistenceCheck,
+		ExistenceCheck: b.keyManagerExistenceCheck,
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.CreateOperation: &framework.PathOperation{
 				Callback: b.signTx,
@@ -84,8 +86,12 @@ func pathSignTx(b *Backend) *framework.Path {
 			},
 			"chainId": {
 				Type:        framework.TypeString,
-				Description: "(optional) Chain ID of the target blockchain network. If present, EIP155 signer will be used to sign. If omitted, Homestead signer will be used.",
-				Default:     "0",
+				Description: "(required) Non-zero chain ID of the target blockchain network.",
+			},
+			"accessList": {
+				Type:        framework.TypeString,
+				Description: "(optional) JSON-encoded access list for EIP-2930/EIP-1559 transactions. Format: [{\"address\":\"0x...\",\"storageKeys\":[\"0x...\"]}]",
+				Default:     "",
 			},
 		},
 	}
@@ -96,25 +102,29 @@ func (b *Backend) signTx(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	feildsAndTx, err := b.validateAndGetTx(data)
+	fieldsAndTx, err := b.validateAndGetTx(data)
 	if err != nil {
 		return nil, err
 	}
 
-	keyManager, err := b.retrieveKeyManager(ctx, req, feildsAndTx.from)
+	keyManager, err := b.retrieveKeyManager(ctx, req, fieldsAndTx.from)
 	if err != nil {
 		b.Logger().Error("Failed to retrieve the signing keyManager",
-			"address", feildsAndTx.from, "error", err)
-		return nil, fmt.Errorf("error retrieving signing keyManager %s", feildsAndTx.from)
+			"address", fieldsAndTx.from, "error", err)
+		return nil, fmt.Errorf("error retrieving signing keyManager %s", fieldsAndTx.from)
 	}
 
 	if keyManager == nil {
-		return nil, fmt.Errorf("signing keyManager %s does not exist", feildsAndTx.from)
+		return nil, fmt.Errorf("signing keyManager %s does not exist", fieldsAndTx.from)
+	}
+
+	if len(keyManager.KeyPairs) == 0 {
+		return nil, fmt.Errorf("signing keyManager %s does not have a key pair", fieldsAndTx.from)
 	}
 
 	var privateKeyStr string
 	for _, keyPairs := range keyManager.KeyPairs {
-		if keyPairs.Address == feildsAndTx.address {
+		if strings.EqualFold(keyPairs.Address, fieldsAndTx.address) {
 			privateKeyStr = keyPairs.PrivateKey
 			break
 		}
@@ -131,14 +141,9 @@ func (b *Backend) signTx(
 	}
 	defer zeroKey(privateKey)
 
-	var signer types.Signer
-	if big.NewInt(0).Cmp(feildsAndTx.chainID) == 0 {
-		signer = types.HomesteadSigner{}
-	} else {
-		signer = types.LatestSignerForChainID(feildsAndTx.chainID)
-	}
+	signer := types.LatestSignerForChainID(fieldsAndTx.chainID)
 
-	signedTx, err := types.SignTx(feildsAndTx.tx, signer, privateKey)
+	signedTx, err := types.SignTx(fieldsAndTx.tx, signer, privateKey)
 	if err != nil {
 		b.Logger().Error("Failed to sign the transaction object", "error", err)
 		return nil, err
@@ -153,34 +158,42 @@ func (b *Backend) signTx(
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"txHash":   signedTx.Hash().Hex(),
-			"signedTx": hexutil.Encode(signedTxBuff.Bytes()),
+			"txHash":             signedTx.Hash().Hex(),
+			"signedTx":           hexutil.Encode(signedTxBuff.Bytes()),
+			"transaction_hash":   signedTx.Hash().Hex(),
+			"signed_transaction": hexutil.Encode(signedTxBuff.Bytes()),
 		},
 	}, nil
 }
 
 func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTransaction, error) {
-	from, ok := data.Get("name").(string)
-	if !ok {
-		return nil, errInvalidType
+	from, err := getStringField(data, "name")
+	if err != nil {
+		return nil, err
 	}
 
-	var txDataToSign []byte
-	dataInput, ok := data.Get("data").(string)
-	if !ok {
-		return nil, errInvalidType
+	dataInput, err := getStringField(data, "data")
+	if err != nil {
+		return nil, err
 	}
 
-	// some client such as go-ethereum uses "input" instead of "data"
 	if dataInput == "" {
-		dataInput, ok = data.Get("input").(string)
-		if !ok {
-			return nil, errInvalidType
+		dataInput, err = getStringField(data, "input")
+		if err != nil {
+			return nil, err
 		}
+	}
+
+	if dataInput == "" {
+		dataInput = "0x"
 	}
 
 	if len(dataInput) > 2 && dataInput[0:2] != "0x" {
 		dataInput = "0x" + dataInput
+	}
+
+	if len(dataInput) > 2+(maxTxDataBytes*2) {
+		return nil, fmt.Errorf("transaction data too large")
 	}
 
 	txDataToSign, err := hexutil.Decode(dataInput)
@@ -188,53 +201,103 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 		b.Logger().Error("Failed to decode payload for the 'data' field", "error", err)
 		return nil, err
 	}
-
-	address, ok := data.Get("address").(string)
-	if !ok {
-		return nil, errInvalidType
+	if len(txDataToSign) > maxTxDataBytes {
+		return nil, fmt.Errorf("transaction data too large")
 	}
 
-	amount := validNumber(data.Get("value").(string))
-	if !ok {
-		return nil, errInvalidType
+	address, err := getStringField(data, "address")
+	if err != nil {
+		return nil, err
 	}
 
+	if address == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	if !common.IsHexAddress(address) {
+		return nil, fmt.Errorf("invalid Ethereum address: %s", address)
+	}
+	address = common.HexToAddress(address).Hex()
+
+	valueStr, err := getStringField(data, "value")
+	if err != nil {
+		return nil, err
+	}
+	amount := validNumber(valueStr)
 	if amount == nil {
-		b.Logger().Error("Invalid amount for the 'value' field", "value", data.Get("value").(string))
+		b.Logger().Error("Invalid amount for the 'value' field", "value", valueStr)
 		return nil, fmt.Errorf("invalid amount for the 'value' field")
 	}
 
-	rawAddressTo, ok := data.Get("to").(string)
-	if !ok {
-		return nil, errInvalidType
+	rawAddressTo, err := getStringField(data, "to")
+	if err != nil {
+		return nil, err
 	}
 
-	chainID := validNumber(data.Get("chainId").(string))
-	if chainID == nil {
-		b.Logger().Error("Invalid chainId", "chainId", data.Get("chainId").(string))
-		return nil, fmt.Errorf("invalid chainId value")
+	chainIDStr, err := getStringField(data, "chainId")
+	if err != nil {
+		return nil, err
+	}
+	if chainIDStr == "" {
+		return nil, fmt.Errorf("chainId is required")
+	}
+	chainID := validNumber(chainIDStr)
+	if chainID == nil || chainID.Sign() == 0 {
+		b.Logger().Error("Invalid chainId", "chainId", chainIDStr)
+		return nil, fmt.Errorf("invalid chainId value; must be non-zero")
 	}
 
-	gasLimitIn := validNumber(data.Get("gas").(string))
+	gasStr, err := getStringField(data, "gas")
+	if err != nil {
+		return nil, err
+	}
+	gasLimitIn := validNumber(gasStr)
 	if gasLimitIn == nil {
-		b.Logger().Error("Invalid gas limit", "gas", data.Get("gas").(string))
+		b.Logger().Error("Invalid gas limit", "gas", gasStr)
 		return nil, fmt.Errorf("invalid gas limit")
 	}
-
-	gasLimit := gasLimitIn.Uint64()
-	gasPrice := validNumber(data.Get("gasPrice").(string))
-	gasFeeCapStr := data.Get("gasFeeCap").(string) //nolint
-	gasTipCapStr := data.Get("gasTipCap").(string) //nolint
-	nonceIn := validNumber(data.Get("nonce").(string))
-	if nonceIn == nil {
-		b.Logger().Error("Invalid nonce", "nonce", data.Get("nonce").(string))
-		return nil, fmt.Errorf("invalid nonce")
+	gasLimit, err := uint64FromBig(gasLimitIn)
+	if err != nil {
+		return nil, fmt.Errorf("gas value exceeds uint64")
 	}
 
-	nonce := nonceIn.Uint64()
+	gasPriceStr, err := getStringField(data, "gasPrice")
+	if err != nil {
+		return nil, err
+	}
+	gasPrice := validNumber(gasPriceStr)
+
+	gasFeeCapStr, err := getStringField(data, "gasFeeCap")
+	if err != nil {
+		return nil, err
+	}
+	gasTipCapStr, err := getStringField(data, "gasTipCap")
+	if err != nil {
+		return nil, err
+	}
+
+	nonceStr, err := getStringField(data, "nonce")
+	if err != nil {
+		return nil, err
+	}
+	if nonceStr == "" {
+		return nil, fmt.Errorf("nonce is required")
+	}
+	nonceIn := validNumber(nonceStr)
+	if nonceIn == nil {
+		b.Logger().Error("Invalid nonce", "nonce", nonceStr)
+		return nil, fmt.Errorf("invalid nonce")
+	}
+	nonce, err := uint64FromBig(nonceIn)
+	if err != nil {
+		return nil, fmt.Errorf("nonce value exceeds uint64")
+	}
 
 	var addressTo *common.Address
 	if rawAddressTo != "" {
+		if !common.IsHexAddress(rawAddressTo) {
+			return nil, fmt.Errorf("invalid 'to' address: %s", rawAddressTo)
+		}
 		addressToTemp := common.HexToAddress(rawAddressTo)
 		addressTo = &addressToTemp
 	}
@@ -245,11 +308,55 @@ func (b *Backend) validateAndGetTx(data *framework.FieldData) (*RequestFieldsTra
 		chainID: chainID,
 	}
 
-	if gasFeeCapStr != "" && gasTipCapStr != "" {
-		gasFeeCap := validNumber(data.Get("gasFeeCap").(string))
-		gasTipCap := validNumber(data.Get("gasTipCap").(string))
-		out.tx = newTransactionWithDynamicFee(addressTo, nonce, gasFeeCap, gasTipCap, gasLimit, txDataToSign, amount)
+	hasGasFeeCap := gasFeeCapStr != ""
+	hasGasTipCap := gasTipCapStr != ""
+	if hasGasFeeCap != hasGasTipCap {
+		return nil, fmt.Errorf("gasFeeCap and gasTipCap must be provided together")
+	}
+
+	if hasGasFeeCap && hasGasTipCap {
+		gasFeeCap := validNumber(gasFeeCapStr)
+		if gasFeeCap == nil {
+			return nil, fmt.Errorf("invalid gasFeeCap value")
+		}
+		gasTipCap := validNumber(gasTipCapStr)
+		if gasTipCap == nil {
+			return nil, fmt.Errorf("invalid gasTipCap value")
+		}
+		if gasFeeCap.Cmp(gasTipCap) < 0 {
+			return nil, fmt.Errorf("gasFeeCap must be greater than or equal to gasTipCap")
+		}
+
+		accessListStr, err := getStringField(data, "accessList")
+		if err != nil {
+			return nil, err
+		}
+		var accessList types.AccessList
+		if accessListStr != "" {
+			if len(accessListStr) > maxAccessListJSONBytes {
+				return nil, fmt.Errorf("accessList exceeds size limit")
+			}
+			if err := json.Unmarshal([]byte(accessListStr), &accessList); err != nil {
+				b.Logger().Error("Failed to parse accessList", "error", err)
+				return nil, fmt.Errorf("invalid accessList JSON: %w", err)
+			}
+			if len(accessList) > maxAccessListEntries {
+				return nil, fmt.Errorf("accessList has too many entries")
+			}
+			storageKeysCount := 0
+			for _, tuple := range accessList {
+				storageKeysCount += len(tuple.StorageKeys)
+			}
+			if storageKeysCount > maxAccessListStorageKeys {
+				return nil, fmt.Errorf("accessList has too many storage keys")
+			}
+		}
+
+		out.tx = newTransactionWithDynamicFee(addressTo, nonce, gasFeeCap, gasTipCap, gasLimit, txDataToSign, amount, chainID, accessList)
 	} else {
+		if gasPrice == nil {
+			return nil, fmt.Errorf("invalid gas price")
+		}
 		out.tx = newLegacyTransaction(addressTo, nonce, gasPrice, gasLimit, txDataToSign, amount)
 	}
 

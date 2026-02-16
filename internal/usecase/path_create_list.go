@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -42,6 +43,11 @@ func pathCreateAndList(b *Backend) *framework.Path {
 				Description: "(Optional, default random key) Hex string for the private key (32-byte or 64-char long). If present, the request will import the given key instead of generating a new key.",
 				Default:     "",
 			},
+			"allowRawSigning": {
+				Type:        framework.TypeBool,
+				Description: "Unsafe capability flag. If true, this key manager can sign arbitrary 32-byte digests via /sign.",
+				Default:     false,
+			},
 		},
 	}
 }
@@ -65,15 +71,25 @@ func (b *Backend) createKeyManager(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	serviceInput, ok := data.Get("serviceName").(string)
-	if !ok {
-		return nil, errInvalidType
+	serviceInput, err := getStringField(data, "serviceName")
+	if err != nil {
+		return nil, err
 	}
 
-	keyInput, ok := data.Get("privateKey").(string)
-	if !ok {
-		return nil, errInvalidType
+	if err := validateServiceName(serviceInput); err != nil {
+		return nil, err
 	}
+
+	keyInput, err := getStringField(data, "privateKey")
+	if err != nil {
+		return nil, err
+	}
+
+	allowRawSigning, err := getBoolField(data, "allowRawSigning")
+	if err != nil {
+		return nil, err
+	}
+	_, allowRawSigningProvided := data.GetOk("allowRawSigning")
 
 	keyManager, err := b.retrieveKeyManager(ctx, req, serviceInput)
 	if err != nil {
@@ -82,20 +98,27 @@ func (b *Backend) createKeyManager(
 
 	if keyManager == nil {
 		keyManager = &KeyManager{
-			ServiceName: serviceInput,
+			ServiceName:     serviceInput,
+			AllowRawSigning: allowRawSigning,
 		}
+	} else if allowRawSigningProvided {
+		keyManager.AllowRawSigning = allowRawSigning
 	}
 
 	var privateKey *ecdsa.PrivateKey
 	var privateKeyBytes []byte
 
 	if keyInput != "" {
-		re := regexp.MustCompile("[0-9a-fA-F]{64}$")
+		re := regexp.MustCompile(`^(0x)?[0-9a-fA-F]{64}$`)
 
-		key := re.FindString(keyInput)
-		if key == "" {
-			b.Logger().Error("Input private key did not parse successfully", "privateKey", keyInput)
-			return nil, fmt.Errorf("privateKey must be a 32-byte hexidecimal string")
+		if !re.MatchString(keyInput) {
+			b.Logger().Error("Input private key did not parse successfully")
+			return nil, fmt.Errorf("privateKey must be a 32-byte hexadecimal string")
+		}
+
+		key := keyInput
+		if len(key) > 64 {
+			key = key[len(key)-64:]
 		}
 
 		privateKey, err = crypto.HexToECDSA(key)
@@ -104,7 +127,11 @@ func (b *Backend) createKeyManager(
 			return nil, fmt.Errorf("error reconstructing private key from input hex, %w", err)
 		}
 	} else {
-		privateKey, _ = crypto.GenerateKey()
+		privateKey, err = crypto.GenerateKey()
+		if err != nil {
+			b.Logger().Error("Failed to generate private key", "error", err)
+			return nil, fmt.Errorf("failed to generate private key: %w", err)
+		}
 	}
 
 	privateKeyBytes = crypto.FromECDSA(privateKey)
@@ -124,10 +151,37 @@ func (b *Backend) createKeyManager(
 		Address:    crypto.PubkeyToAddress(*publicKeyECDSA).Hex(),
 	}
 
+	for _, existingKeyPair := range keyManager.KeyPairs {
+		if strings.EqualFold(existingKeyPair.Address, keyPair.Address) {
+			if allowRawSigningProvided {
+				policyPath := fmt.Sprintf("key-managers/%s", serviceInput)
+				entry, err := logical.StorageEntryJSON(policyPath, keyManager)
+				if err != nil {
+					return nil, fmt.Errorf("failed to marshal keyManager: %w", err)
+				}
+				if err := req.Storage.Put(ctx, entry); err != nil {
+					return nil, fmt.Errorf("failed to persist allowRawSigning update: %w", err)
+				}
+			}
+			return &logical.Response{
+				Data: map[string]interface{}{
+					"service_name":      keyManager.ServiceName,
+					"address":           existingKeyPair.Address,
+					"public_key":        existingKeyPair.PublicKey,
+					"allow_raw_signing": keyManager.AllowRawSigning,
+				},
+			}, nil
+		}
+	}
+
 	keyManager.KeyPairs = append(keyManager.KeyPairs, keyPair)
 
 	policyPath := fmt.Sprintf("key-managers/%s", serviceInput)
-	entry, _ := logical.StorageEntryJSON(policyPath, keyManager)
+	entry, err := logical.StorageEntryJSON(policyPath, keyManager)
+	if err != nil {
+		b.Logger().Error("Failed to marshal keyManager to JSON", "error", err)
+		return nil, fmt.Errorf("failed to marshal keyManager: %w", err)
+	}
 	err = req.Storage.Put(ctx, entry)
 	if err != nil {
 		b.Logger().Error("Failed to save the new keyManager to storage", "error", err)

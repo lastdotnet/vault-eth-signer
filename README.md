@@ -1,5 +1,5 @@
-[![Go Report Card](https://goreportcard.com/badge/github.com/Brahma-fi/vault-eth-signer)](https://goreportcard.com/report/github.com/Brahma-fi/vault-eth-signer)
-[![Vault Ethereum Signer Plugin](https://github.com/Brahma-fi/vault-eth-signer/actions/workflows/vault-eth-signer.yml/badge.svg)](https://github.com/Brahma-fi/vault-eth-signer/actions/workflows/vault-eth-signer.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/lastdotnet/vault-eth-signer)](https://goreportcard.com/report/github.com/lastdotnet/vault-eth-signer)
+[![Vault Ethereum Signer Plugin](https://github.com/lastdotnet/vault-eth-signer/actions/workflows/vault-eth-signer.yml/badge.svg)](https://github.com/lastdotnet/vault-eth-signer/actions/workflows/vault-eth-signer.yml)
 
 # Vault-Eth-Signer
 Eth key plugin is a HashiCorp Vault plugin that supports `ecdsa.secp256k1` based signing, with an API interface
@@ -28,8 +28,8 @@ go version go1.21.1 linux/amd64
 all modules verified
 cleaning...
 building...
--rwxrwxr-x 1 user1 user1 20M Aug 29 17:10 /go/src/github.com/Brahma-fi/vault-eth-signer/.bin/debug/vault-eth-signer
-b46018f9d398843a8003a7bf4cd2c97c9be09545d9b113fb84f10b10a74f796d  /go/src/github.com/Brahma-fi/vault-eth-signer/.bin/debug/vault-eth-signer
+-rwxrwxr-x 1 user1 user1 20M Aug 29 17:10 /go/src/github.com/lastdotnet/vault-eth-signer/.bin/debug/vault-eth-signer
+b46018f9d398843a8003a7bf4cd2c97c9be09545d9b113fb84f10b10a74f796d  /go/src/github.com/lastdotnet/vault-eth-signer/.bin/debug/vault-eth-signer
 ```
 
 first segment of last line is the SHA256 checksum hash `b46018f9d398843a8003a7bf4cd2c97c9be09545d9b113fb84f10b10a74f796d`.

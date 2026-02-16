@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -14,7 +16,7 @@ import (
 func pathSign(b *Backend) *framework.Path {
 	return &framework.Path{
 		Pattern:        "key-managers/" + framework.GenericNameRegex("name") + "/sign",
-		ExistenceCheck: b.pathExistenceCheck,
+		ExistenceCheck: b.keyManagerExistenceCheck,
 		Operations: map[logical.Operation]framework.OperationHandler{
 			logical.CreateOperation: &framework.PathOperation{
 				Callback: b.sign,
@@ -46,20 +48,41 @@ func (b *Backend) sign(
 	req *logical.Request,
 	data *framework.FieldData,
 ) (*logical.Response, error) {
-	serviceNameInput, ok := data.Get("name").(string)
-	if !ok {
-		return nil, errInvalidType
+	serviceNameInput, err := getStringField(data, "name")
+	if err != nil {
+		return nil, err
 	}
 
-	hashInput, ok := data.Get("hash").(string)
-	if !ok {
-		return nil, errInvalidType
+	hashInput, err := getStringField(data, "hash")
+	if err != nil {
+		return nil, err
 	}
 
-	address, ok := data.Get("address").(string)
-	if !ok {
-		return nil, errInvalidType
+	if hashInput == "" {
+		return nil, fmt.Errorf("hash is required")
 	}
+
+	hashBytes, err := hexutil.Decode(hashInput)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hash hex encoding: %w", err)
+	}
+	if len(hashBytes) != 32 {
+		return nil, fmt.Errorf("hash must be exactly 32 bytes, got %d", len(hashBytes))
+	}
+
+	address, err := getStringField(data, "address")
+	if err != nil {
+		return nil, err
+	}
+
+	if address == "" {
+		return nil, fmt.Errorf("address is required")
+	}
+
+	if !common.IsHexAddress(address) {
+		return nil, fmt.Errorf("invalid Ethereum address: %s", address)
+	}
+	address = common.HexToAddress(address).Hex()
 
 	keyManager, err := b.retrieveKeyManager(ctx, req, serviceNameInput)
 	if err != nil {
@@ -76,9 +99,13 @@ func (b *Backend) sign(
 		return nil, fmt.Errorf("signing keyManager %s does not have a key pair", serviceNameInput)
 	}
 
+	if !keyManager.AllowRawSigning {
+		return nil, fmt.Errorf("raw hash signing is disabled for key manager %s", serviceNameInput)
+	}
+
 	var privateKeyStr string
 	for _, keyPairs := range keyManager.KeyPairs {
-		if keyPairs.Address == address {
+		if strings.EqualFold(keyPairs.Address, address) {
 			privateKeyStr = keyPairs.PrivateKey
 			break
 		}
@@ -95,14 +122,10 @@ func (b *Backend) sign(
 	}
 	defer zeroKey(privateKey)
 
-	if err != nil {
-		return nil, err
-	}
-
-	sig, err := crypto.Sign(common.HexToHash(hashInput).Bytes(), privateKey)
+	sig, err := crypto.Sign(hashBytes, privateKey)
 	if err != nil {
 		b.Logger().Error("Error signing input hash", "error", err)
-		return nil, fmt.Errorf("error reconstructing private key from retrieved hex")
+		return nil, fmt.Errorf("error signing hash: %w", err)
 	}
 
 	return &logical.Response{

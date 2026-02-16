@@ -15,8 +15,9 @@ type KeyPair struct {
 }
 
 type KeyManager struct {
-	ServiceName string     `json:"service_name"`
-	KeyPairs    []*KeyPair `json:"key_pairs"`
+	ServiceName     string     `json:"service_name"`
+	KeyPairs        []*KeyPair `json:"key_pairs"`
+	AllowRawSigning bool       `json:"allow_raw_signing"`
 }
 
 func paths(b *Backend) []*framework.Path {
